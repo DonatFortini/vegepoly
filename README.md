@@ -43,39 +43,57 @@ cargo tauri dev
 
 ## Complexité Temporelle de l'Algorithme d'Échantillonnage
 
-L'algorithme d'échantillonnage Poisson Disc implémenté dans `sampling.rs` présente les caractéristiques de complexité suivantes :
+L'algorithme d'échantillonnage Poisson Disc implémenté dans `sampling.rs` présente une analyse de complexité détaillée :
 
 ### Initialisation
 
 - **Construction du Sampler** : O(1) - La création de l'instance du sampler est une opération constante.
-- **Initialisation de la grille** : O(W × H) où W et H sont la largeur et la hauteur de la grille. Cette opération alloue l'espace mémoire pour la grille qui optimise la recherche de voisinage.
+- **Initialisation de la grille** : O(W × H) où W et H sont la largeur et la hauteur de la grille calculées à partir des dimensions du polygone et de la distance minimale.
 
 ### Génération de Distribution
 
-- **Placement du premier point** : O(k) où k est le nombre maximum de tentatives pour placer un point initial (limité à 100 dans l'implémentation actuelle).
+Pour chaque polygone dans le fichier CSV :
 
-- **Génération des points suivants** :
+#### Placement du premier point initial
 
-  - Dans le pire cas : O(n × m × c) où :
-    - n est le nombre de points générés
-    - m est le nombre maximal de tentatives par point (défini par `max_attempts`, ici 30)
-    - c est la complexité de vérification de validité d'un point
+- **Meilleur cas** : O(1) si le premier point aléatoire est valide (à l'intérieur du polygone)
+- **Pire cas** : O(k) où k est le nombre maximum de tentatives (100 dans l'implémentation actuelle)
+- **Cas moyen** : Dépend de la forme du polygone, généralement proche de O(1) pour des polygones de forme raisonnable
 
-- **Vérification de la validité d'un point** (`is_point_valid`) :
-  - O(k²) où k est le nombre de cellules voisines vérifiées (généralement 9 cellules dans une grille 2D)
-  - Cette opération est optimisée par l'utilisation d'une grille accélératrice qui divise l'espace en cellules de taille appropriée pour limiter les comparaisons
+#### Boucle principale de génération de points
 
-### Complexité globale
+- Pour chaque point actif, l'algorithme tente de placer de nouveaux points dans son voisinage
+- Nombre total d'itérations : O(n) où n est le nombre final de points générés
 
-La complexité globale de l'algorithme est approximativement O(n × m) où n est le nombre de points générés et m est le nombre maximal de tentatives.
+#### Pour chaque itération
 
-Dans la pratique, la performance est généralement meilleure que cette borne supérieure grâce à plusieurs optimisations :
+- **Génération d'un point aléatoire** : O(1)
+- **Vérification de validité** (`is_point_valid`) :
+  - **Meilleur cas** : O(1) quand la grille élimine efficacement la plupart des vérifications
+  - **Pire cas** : O(k²) où k est le nombre de cellules voisines vérifiées (généralement 9 dans une grille 2D)
+  - **Cas moyen** : O(1) grâce à la structure d'accélération par grille
 
-1. L'utilisation d'une grille accélératrice qui limite les comparaisons de distance à un petit nombre de voisins potentiels
-2. La taille des cellules de la grille est optimisée (`cell_size = min_distance / √2`) pour garantir qu'une cellule ne peut contenir qu'un seul point valide
-3. L'utilisation d'une liste de points "actifs" qui permet de ne considérer que les points pouvant potentiellement générer de nouveaux voisins
+### Complexité globale pour p polygones
 
-Ces optimisations font que l'algorithme reste efficace même pour la génération d'un grand nombre de points, avec une complexité pratique souvent plus proche de O(n) que O(n²).
+- **Meilleur cas** : O(p × n) où p est le nombre de polygones et n le nombre moyen de points par polygone
+- **Pire cas** : O(p × n × m × k²) où :
+  - p est le nombre de polygones
+  - n est le nombre de points générés par polygone
+  - m est le nombre maximal de tentatives par point (30)
+  - k² est le coût de vérification de validité dans le pire cas
+- **Cas moyen en pratique** : O(p × n) grâce aux optimisations implémentées
+
+L'algorithme reste hautement efficace en pratique grâce à plusieurs optimisations clés :
+
+1. **Grille d'accélération spatiale** : La taille des cellules (`cell_size = min_distance / √2`) est optimisée pour garantir qu'une cellule ne peut contenir qu'un seul point valide, ce qui réduit drastiquement le nombre de comparaisons de distance nécessaires.
+
+2. **Liste de points actifs** : L'algorithme maintient une liste de points "actifs" qui peuvent potentiellement générer de nouveaux voisins, évitant ainsi de reconsidérer des régions déjà saturées.
+
+3. **Interruption précoce** : La vérification de validité s'arrête dès qu'une violation de la distance minimale est détectée.
+
+4. **Optimisation de recherche de voisinage** : Seules les cellules adjacentes dans la grille sont vérifiées, réduisant considérablement l'espace de recherche.
+
+Ces optimisations font que l'algorithme maintient une excellente performance même pour la génération d'un grand nombre de points dans des polygones complexes ou pour le traitement de fichiers CSV contenant de nombreux polygones.
 
 ## Licence
 
