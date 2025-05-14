@@ -1,19 +1,19 @@
-/// Module contenant les structures de données utilisées dans l'application.
-/// Définit les types de données pour la génération et le traitement de la végétation.
+#![allow(unused_imports)]
+use directories::UserDirs;
 use geo::Point;
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use xdg_user::UserDirs as XdgUserDirs;
 
-/// Structure qui maintient l'état du traitement des données de végétation.
-/// Utilisée pour suivre la progression et collecter les erreurs pendant le traitement.
 pub struct VegetationProcessingState {
-    /// Nombre de lignes traitées dans le fichier CSV
     pub processed_rows: Mutex<usize>,
-    /// Nombre total de lignes dans le fichier CSV
     pub total_rows: Mutex<usize>,
-    /// Collection des erreurs rencontrées pendant le traitement
     pub errors: Mutex<Vec<String>>,
-    /// Nombre d'éléments de végétation créés
     pub created_items: Mutex<usize>,
 }
 
@@ -24,7 +24,6 @@ impl Default for VegetationProcessingState {
 }
 
 impl VegetationProcessingState {
-    /// Crée une nouvelle instance de l'état de traitement avec des valeurs par défaut.
     pub fn new() -> Self {
         VegetationProcessingState {
             processed_rows: Mutex::new(0),
@@ -35,40 +34,212 @@ impl VegetationProcessingState {
     }
 }
 
-/// Paramètres pour la génération de végétation.
-/// Cette structure contient les paramètres configurables pour la génération de végétation.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct VegetationParams {
-    /// Type de végétation (1: Arbres, 2: Surfaces, 3: Roccailles)
     pub vegetation_type: u8,
-    /// Densité de la végétation (contrôle la distance minimale entre les points)
     pub density: f64,
-    /// Variation de position (variation aléatoire ajoutée à chaque point)
     pub variation: f64,
-    /// Valeur de type utilisée dans la sortie des données
     pub type_value: u8,
 }
 
-/// Structure pour représenter les données de polygone et les points générés.
-/// Utilisée pour transférer les données entre le backend et l'interface utilisateur.
 #[derive(Serialize)]
 pub struct PolygonData {
-    /// Points définissant le contour du polygone
     pub polygon: Vec<Point>,
-    /// Points générés à l'intérieur du polygone
     pub points: Vec<Point>,
 }
 
-/// Structure pour représenter l'information de progression du traitement.
-/// Utilisée pour informer l'interface utilisateur de l'état du traitement.
 #[derive(Serialize, Clone)]
 pub struct VegetationProgressInfo {
-    /// Ligne actuellement en cours de traitement
     pub current_row: usize,
-    /// Nombre total de lignes à traiter
     pub total_rows: usize,
-    /// Nombre d'éléments de végétation créés jusqu'à présent
     pub created_items: usize,
-    /// Liste des erreurs rencontrées pendant le traitement
     pub errors: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Settings {
+    pub default_vegetation_params: HashMap<i8, VegetationParams>,
+    pub user_vegetation_params: HashMap<i8, VegetationParams>,
+    pub export_path: String,
+    #[serde(skip)]
+    config_path: String,
+}
+
+static SETTINGS: OnceLock<Arc<Mutex<Settings>>> = OnceLock::new();
+static INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+impl Default for Settings {
+    fn default() -> Self {
+        let export_path = {
+            #[cfg(target_os = "windows")]
+            {
+                let user_dirs = UserDirs::new().unwrap();
+                user_dirs
+                    .downloads()
+                    .unwrap()
+                    .to_path_buf()
+                    .to_string_lossy()
+                    .to_string()
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let user_dirs = XdgUserDirs::new().unwrap();
+                user_dirs
+                    .downloads()
+                    .unwrap()
+                    .to_path_buf()
+                    .to_string_lossy()
+                    .to_string()
+            }
+        };
+
+        let config_path = "settings.json".to_string();
+
+        Settings {
+            default_vegetation_params: HashMap::from([
+                (
+                    1,
+                    VegetationParams {
+                        vegetation_type: 1,
+                        density: 28.0,
+                        variation: 1.0,
+                        type_value: 10,
+                    },
+                ),
+                (
+                    2,
+                    VegetationParams {
+                        vegetation_type: 2,
+                        density: 5.0,
+                        variation: 0.5,
+                        type_value: 20,
+                    },
+                ),
+                (
+                    3,
+                    VegetationParams {
+                        vegetation_type: 3,
+                        density: 3.0,
+                        variation: 0.3,
+                        type_value: 30,
+                    },
+                ),
+            ]),
+            user_vegetation_params: HashMap::new(),
+            export_path,
+            config_path,
+        }
+    }
+}
+
+impl Settings {
+    pub fn new() -> Self {
+        Settings::default()
+    }
+
+    pub fn global() -> Arc<Mutex<Settings>> {
+        SETTINGS
+            .get_or_init(|| {
+                let settings = if !INITIALIZED.load(Ordering::SeqCst) {
+                    let settings = Settings::load();
+                    INITIALIZED.store(true, Ordering::SeqCst);
+                    settings
+                } else {
+                    Settings::default()
+                };
+
+                Arc::new(Mutex::new(settings))
+            })
+            .clone()
+    }
+
+    pub fn load() -> Self {
+        let default_settings = Settings::default();
+        let config_path = Path::new(&default_settings.config_path);
+
+        if !config_path.exists() {
+            let settings = Settings::default();
+            settings.save().unwrap_or_else(|e| {
+                eprintln!(
+                    "Erreur lors de la sauvegarde des paramètres par défaut: {}",
+                    e
+                );
+            });
+            return settings;
+        }
+
+        match File::open(config_path) {
+            Ok(mut file) => {
+                let mut contents = String::new();
+                match file.read_to_string(&mut contents) {
+                    Ok(_) => match serde_json::from_str::<Settings>(&contents) {
+                        Ok(mut settings) => {
+                            settings.config_path = default_settings.config_path;
+                            settings
+                        }
+                        Err(e) => {
+                            eprintln!("Erreur lors de la désérialisation des paramètres: {}", e);
+                            default_settings
+                        }
+                    },
+                    Err(e) => {
+                        eprintln!(
+                            "Erreur lors de la lecture du fichier de configuration: {}",
+                            e
+                        );
+                        default_settings
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "Erreur lors de l'ouverture du fichier de configuration: {}",
+                    e
+                );
+                default_settings
+            }
+        }
+    }
+
+    pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let json = serde_json::to_string_pretty(self)?;
+        let mut file = File::create(&self.config_path)?;
+        file.write_all(json.as_bytes())?;
+
+        Ok(())
+    }
+
+    pub fn get_export_path(&self) -> PathBuf {
+        PathBuf::from(&self.export_path)
+    }
+
+    pub fn set_export_path(&mut self, path: PathBuf) {
+        self.export_path = path.to_string_lossy().to_string();
+        self.save().unwrap_or_else(|e| {
+            eprintln!(
+                "Erreur lors de la sauvegarde après modification du chemin d'exportation: {}",
+                e
+            );
+        });
+    }
+
+    pub fn get_default_vegetation_params(&self, vegetation_type: i8) -> Option<VegetationParams> {
+        self.default_vegetation_params
+            .get(&vegetation_type)
+            .cloned()
+    }
+
+    pub fn get_user_vegetation_params(&self, vegetation_type: i8) -> Option<VegetationParams> {
+        self.user_vegetation_params.get(&vegetation_type).cloned()
+    }
+
+    pub fn set_user_vegetation_params(&mut self, vegetation_type: i8, params: VegetationParams) {
+        self.user_vegetation_params.insert(vegetation_type, params);
+        self.save().unwrap_or_else(|e| {
+            eprintln!(
+                "Erreur lors de la sauvegarde après modification des paramètres utilisateur: {}",
+                e
+            );
+        });
+    }
 }

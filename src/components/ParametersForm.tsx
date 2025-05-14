@@ -1,45 +1,69 @@
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import {
-  faUndo,
-  faQuestionCircle,
-  faBook,
-} from "@fortawesome/free-solid-svg-icons";
+import { faUndo, faBook, faSave } from "@fortawesome/free-solid-svg-icons";
 import { VegetationParams } from "../types";
 import Card from "./shared/Card";
 import Button from "./shared/Button";
+import { useState } from "react";
 
 interface ParametersFormProps {
   params: VegetationParams;
   handleParamChange: (param: keyof VegetationParams, value: string) => void;
   loadDefaultParams: (type: number) => void;
+  saveUserParams: () => Promise<boolean>;
   vegetationType: number;
   isProcessing: boolean;
   toggleTypeHelp: () => void;
   toggleParamsGuidelines: () => void;
+  hasChanges: boolean;
 }
 
 const ParametersForm = ({
   params,
   handleParamChange,
   loadDefaultParams,
+  saveUserParams,
   vegetationType,
   isProcessing,
-  toggleTypeHelp,
   toggleParamsGuidelines,
+  hasChanges,
 }: ParametersFormProps) => {
+  const [saveStatus, setSaveStatus] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    const success = await saveUserParams();
+    if (success) {
+      setSaveStatus("Sauvegardé !");
+      setTimeout(() => setSaveStatus(null), 2000);
+    } else {
+      setSaveStatus("Erreur");
+      setTimeout(() => setSaveStatus(null), 2000);
+    }
+  };
+
   return (
     <Card variant="secondary" className="mb-3 flex-grow">
       <div className="flex justify-between items-center mb-3">
-        <Button
-          onClick={() => loadDefaultParams(vegetationType)}
-          icon={faUndo}
-          variant="primary"
-        >
-          Valeurs par Défaut
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            onClick={() => loadDefaultParams(vegetationType)}
+            icon={faUndo}
+            variant="primary"
+            className="text-sm px-2 py-1"
+            children={undefined}
+          />
+          <Button
+            onClick={handleSave}
+            icon={faSave}
+            variant="primary"
+            disabled={isProcessing || !hasChanges}
+            className="text-sm px-2 py-1"
+          >
+            {saveStatus || ""}
+          </Button>
+        </div>
 
         <button
-          className="px-3 py-1 rounded-md flex items-center border border-gray-300"
+          className="px-3 py-1 rounded-md flex items-center border border-gray-300 ml-2"
           onClick={toggleParamsGuidelines}
           id="interactive"
         >
@@ -47,6 +71,18 @@ const ParametersForm = ({
           Guide des paramètres
         </button>
       </div>
+
+      {saveStatus && (
+        <div
+          className={`p-2 rounded mb-3 text-center ${
+            saveStatus.includes("Erreur")
+              ? "bg-red-100 text-red-700"
+              : "bg-green-100 text-green-700"
+          }`}
+        >
+          {saveStatus}
+        </div>
+      )}
 
       <div className="space-y-4">
         <div>
@@ -87,16 +123,6 @@ const ParametersForm = ({
         </div>
 
         <div>
-          <label className="block mb-1 items-center font-medium">
-            Valeur de Type
-            <button
-              className="ml-2"
-              onClick={toggleTypeHelp}
-              id="medium-visibility"
-            >
-              <FontAwesomeIcon icon={faQuestionCircle} />
-            </button>
-          </label>
           <select
             value={params.type_value}
             onChange={(e) => handleParamChange("type_value", e.target.value)}

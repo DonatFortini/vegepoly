@@ -1,5 +1,3 @@
-/// Module de traitement des données de végétation.
-/// Contient les fonctions pour traiter les fichiers CSV et générer la végétation.
 use chrono::Local;
 use geo::Point;
 use rand::Rng;
@@ -8,6 +6,7 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
 use tauri::State;
 
+use crate::Settings;
 use crate::models::{
     PolygonData, VegetationParams, VegetationProcessingState, VegetationProgressInfo,
 };
@@ -33,23 +32,19 @@ pub async fn generate_vegetation_from_csv(
     params: VegetationParams,
     state: State<'_, VegetationProcessingState>,
 ) -> Result<String, String> {
-    // Réinitialise l'état du traitement
     *state.processed_rows.lock().unwrap() = 0;
     *state.created_items.lock().unwrap() = 0;
     state.errors.lock().unwrap().clear();
 
-    // Compte le nombre total de lignes dans le fichier
     let total_rows = match count_file_rows(&csv_path) {
         Ok(count) => count,
         Err(e) => return Err(format!("Error counting rows: {}", e)),
     };
     *state.total_rows.lock().unwrap() = total_rows;
 
-    // Génère un nom de fichier avec horodatage
     let now = Local::now();
     let output_filename = format!("Export {}.txt", now.format("%d-%m-%Y %Hh%M-%S"));
 
-    // Traite les données et génère la végétation
     match process_vegetation_data(&csv_path, &output_filename, params, state) {
         Ok(_) => Ok(output_filename),
         Err(e) => Err(format!("Error processing file: {}", e)),
@@ -91,19 +86,16 @@ pub fn process_vegetation_data(
     params: VegetationParams,
     state: State<'_, VegetationProcessingState>,
 ) -> Result<(), Box<dyn Error>> {
-    // Ouvre et lit le fichier d'entrée
     let file = File::open(input_path)?;
     let mut content = Vec::new();
     let mut reader = BufReader::new(file);
     std::io::Read::read_to_end(&mut reader, &mut content)?;
     let cleaned_content = String::from_utf8_lossy(&content).into_owned();
-
-    // Prépare le fichier de sortie
-    let output_file = File::create(output_path)?;
+    let settings = Settings::global();
+    let settings_guard = settings.lock().unwrap();
+    let output_file = File::create(settings_guard.get_export_path().join(output_path))?;
     let mut writer = BufWriter::new(output_file);
     write_header(&mut writer)?;
-
-    // Traite chaque ligne du fichier
     let lines: Vec<&str> = cleaned_content.split('\n').collect();
     let mut row_index = 0;
 
@@ -112,17 +104,13 @@ pub fn process_vegetation_data(
             continue;
         }
 
-        // Vérifie si la ligne contient des données de polygone
         if line.contains("POLYGON") || line.contains("MULTIPOLYGON") {
             match distribute_points_in_polygon(line, row_index, &params, &state) {
                 Ok(points) => {
-                    // Écrit les points générés dans le fichier de sortie
                     for point in points.clone() {
                         writer.write_all(point.as_bytes())?;
                     }
                     writer.flush()?;
-
-                    // Met à jour le compteur d'éléments créés
                     let mut created_items = state.created_items.lock().unwrap();
                     *created_items += points.len();
 
@@ -143,7 +131,6 @@ pub fn process_vegetation_data(
                     );
                 }
                 Err(e) => {
-                    // Enregistre les erreurs rencontrées
                     state
                         .errors
                         .lock()
@@ -186,7 +173,6 @@ pub fn distribute_points_in_polygon(
     let mut points = Vec::new();
     let mut rng = rand::rng();
 
-    // Vérifie le format du polygone
     if !polygon_str.contains("POLYGON((") && !polygon_str.contains("MULTIPOLYGON((") {
         return Err(format!("Impossible : Problème(3) Ligne : {}", row_index).into());
     }
@@ -194,7 +180,6 @@ pub fn distribute_points_in_polygon(
         return Err(format!("Impossible : MULTIPOLYGON Ligne : {}", row_index).into());
     }
 
-    // Transforme et analyse la chaîne de polygone
     let modified_str = transform_polygon_string(polygon_str);
     let maybe_polygon = extract_polygon_from_string(&modified_str);
     let polygon = match maybe_polygon {
@@ -202,10 +187,7 @@ pub fn distribute_points_in_polygon(
         None => parse_polygon_wkt(polygon_str)?,
     };
 
-    // Calcule les limites du polygone
     let bounds = calculate_polygon_bounds(&polygon);
-
-    // Crée un échantillonneur de distribution spatiale et génère des points
     let mut sampler = SpatialDistributionSampler::new(params.density, bounds);
     let sampled_points = sampler.generate_distribution(&polygon);
 
@@ -230,7 +212,6 @@ pub fn distribute_points_in_polygon(
 
         let type_code = params.type_value;
 
-        // Formate la chaîne de sortie pour le point
         let end_row = format!("									20				20096																		0	{}	", type_code);
         let point_str = format!("       {}\t       {}{}\n", x_final, y_final, end_row);
         points.push(point_str);
@@ -258,7 +239,6 @@ pub async fn extract_polygon_data(
         Err(e) => return Err(format!("Erreur lors de l'ouverture du fichier: {}", e)),
     };
 
-    // Lit le contenu du fichier
     let mut content = Vec::new();
     let mut reader = BufReader::new(file);
     if let Err(e) = std::io::Read::read_to_end(&mut reader, &mut content) {
@@ -268,7 +248,6 @@ pub async fn extract_polygon_data(
     let cleaned_content = String::from_utf8_lossy(&content).into_owned();
     let lines: Vec<&str> = cleaned_content.split('\n').collect();
 
-    // Cherche la première ligne contenant un polygone
     let mut polygon_line = "";
     for line in lines.iter().skip(1) {
         if line.contains("POLYGON") || line.contains("MULTIPOLYGON") {
@@ -281,7 +260,6 @@ pub async fn extract_polygon_data(
         return Err("Aucun polygone trouvé dans le fichier CSV".into());
     }
 
-    // Analyse le polygone
     let modified_str = transform_polygon_string(polygon_line);
     let maybe_polygon = extract_polygon_from_string(&modified_str);
     let polygon = match maybe_polygon {
@@ -292,24 +270,19 @@ pub async fn extract_polygon_data(
         },
     };
 
-    // Extrait les points du polygone pour la visualisation
     let polygon_points: Vec<Point> = polygon
         .exterior()
         .coords()
         .map(|coord| (coord.x, coord.y).into())
         .collect();
 
-    // Calcule les limites du polygone
     let bounds = calculate_polygon_bounds(&polygon);
-
-    // Génère des points dans le polygone
     let mut sampler = SpatialDistributionSampler::new(params.density, bounds);
     let sampled_points = sampler.generate_distribution(&polygon);
 
     let mut generated_points: Vec<Point> = Vec::new();
     let mut rng = rand::rng();
 
-    // Applique la variation aux points générés
     for point in sampled_points {
         let (x_variation, y_variation) = if params.variation > 0.0 {
             let angle = rng.random::<f64>() * 2.0 * std::f64::consts::PI;
@@ -325,7 +298,6 @@ pub async fn extract_polygon_data(
         generated_points.push((x_final, y_final).into());
     }
 
-    // Renvoie les données du polygone et les points générés
     Ok(PolygonData {
         polygon: polygon_points,
         points: generated_points,

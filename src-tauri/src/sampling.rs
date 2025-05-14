@@ -1,5 +1,3 @@
-/// Module pour l'échantillonnage spatial des points de végétation.
-/// Implémente un algorithme de distribution poissonnique pour distribuer des points dans un polygone.
 use geo::{Contains, Point, Polygon};
 use rand::Rng;
 
@@ -81,7 +79,6 @@ impl SpatialDistributionSampler {
             }
         }
 
-        // Si aucun point de départ n'a été trouvé, retourne un ensemble vide
         if self.active_indices.is_empty() {
             return Vec::new();
         }

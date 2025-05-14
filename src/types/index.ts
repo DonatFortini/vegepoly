@@ -1,4 +1,3 @@
-// Types partagés pour l'application
 export interface VegetationParams {
   vegetation_type: number;
   density: number;

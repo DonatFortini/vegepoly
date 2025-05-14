@@ -1,10 +1,9 @@
-/// Module contenant des fonctions utilitaires pour le traitement des données.
-/// Fournit des fonctions pour manipuler les fichiers, les polygones et autres opérations communes.
 use geo::{Coord, Polygon};
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
 
+use crate::Settings;
 use crate::models::VegetationParams;
 
 /// Compte le nombre de lignes dans un fichier.
@@ -215,30 +214,48 @@ pub fn calculate_polygon_bounds(polygon: &Polygon<f64>) -> (f64, f64, f64, f64) 
 /// Les paramètres par défaut pour le type de végétation spécifié
 #[tauri::command]
 pub fn get_default_vegetation_params(vegetation_type: u8) -> VegetationParams {
-    match vegetation_type {
-        1 => VegetationParams {
-            vegetation_type: 1,
-            density: 10.0,
-            variation: 1.0,
-            type_value: 10,
-        },
-        2 => VegetationParams {
-            vegetation_type: 2,
+    let settings = Settings::global();
+    let settings_guard = settings.lock().unwrap();
+    match settings_guard.get_default_vegetation_params(vegetation_type as i8) {
+        Some(params) => params,
+        None => VegetationParams {
+            vegetation_type,
             density: 5.0,
             variation: 0.5,
-            type_value: 20,
-        },
-        3 => VegetationParams {
-            vegetation_type: 3,
-            density: 3.0,
-            variation: 0.3,
-            type_value: 30,
-        },
-        _ => VegetationParams {
-            vegetation_type: 1,
-            density: 10.0,
-            variation: 1.0,
             type_value: 10,
         },
     }
+}
+
+#[tauri::command]
+/// Commande Tauri pour définir les paramètres de végétation de l'utilisateur.
+///
+/// # Arguments
+/// * `vegetation_type` - Type de végétation (1: Arbres, 2: Surfaces, 3: Roccailles)
+/// * `params` - Paramètres de végétation à définir
+///
+/// # Retours
+/// Ok(()) en cas de succès ou une erreur
+pub fn set_user_vegetation_params(
+    vegetation_type: i8,
+    params: VegetationParams,
+) -> Result<(), String> {
+    let settings = Settings::global();
+    let mut settings_guard = settings.lock().unwrap();
+    settings_guard.set_user_vegetation_params(vegetation_type, params);
+    Ok(())
+}
+
+#[tauri::command]
+/// Commande Tauri pour obtenir les paramètres de végétation de l'utilisateur.
+///
+/// # Arguments
+/// * `vegetation_type` - Type de végétation (1: Arbres, 2: Surfaces, 3: Roccailles)
+///
+/// # Retours
+/// Option<VegetationParams> contenant les paramètres de végétation de l'utilisateur ou None si non définis
+pub fn get_user_vegetation_params(vegetation_type: i8) -> Option<VegetationParams> {
+    let settings = Settings::global();
+    let settings_guard = settings.lock().unwrap();
+    settings_guard.get_user_vegetation_params(vegetation_type)
 }

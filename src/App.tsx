@@ -14,9 +14,13 @@ import ParametersForm from "./components/ParametersForm";
 import FileOperations from "./components/FileOperations";
 import ProgressResults from "./components/ProgressResults";
 import PolygonPreview from "./components/PolygonPreview";
-import TypeHelpModal from "./components/modals/TypeHelpModal";
-import PoissonInfoModal from "./components/modals/PoissonInfoModal";
-import ParamsGuidelinesModal from "./components/modals/ParamsGuidelinesModal";
+import PoissonInfoPopup from "./components/popups/PoissonInfoPopup";
+import ParamsGuidelinesPopup from "./components/popups/ParamsGuidelinesPopup";
+import {
+  getUserVegetationParams,
+  paramsAreEqual,
+  saveVegetationParams,
+} from "./api/settings-api";
 
 function App() {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
@@ -40,9 +44,30 @@ function App() {
   const [showPoissonInfo, setShowPoissonInfo] = useState<boolean>(false);
   const [showParamsGuidelines, setShowParamsGuidelines] =
     useState<boolean>(false);
+  const [savedParams, setSavedParams] = useState<VegetationParams | null>(null);
+  const [hasChanges, setHasChanges] = useState<boolean>(false);
 
   useEffect(() => {
-    loadDefaultParams(vegetationType);
+    const loadParams = async () => {
+      const userParams = await getUserVegetationParams(vegetationType);
+      if (userParams) {
+        setParams(userParams);
+        setSavedParams(userParams);
+        setHasChanges(false);
+      } else {
+        const defaults = await invoke<VegetationParams>(
+          "get_default_vegetation_params",
+          {
+            vegetationType: vegetationType,
+          }
+        );
+        setParams(defaults);
+        setSavedParams(null);
+        setHasChanges(true);
+      }
+    };
+
+    loadParams();
   }, [vegetationType]);
 
   useEffect(() => {
@@ -117,6 +142,24 @@ function App() {
     }
   };
 
+  const saveUserParams = async () => {
+    try {
+      const paramsToSave = {
+        ...params,
+        vegetation_type: vegetationType,
+      };
+      const success = await saveVegetationParams(vegetationType, paramsToSave);
+      if (success) {
+        setSavedParams(paramsToSave);
+        setHasChanges(false);
+      }
+      return success;
+    } catch (error) {
+      console.error("Erreur lors de la sauvegarde des paramètres:", error);
+      return false;
+    }
+  };
+
   const executeProcessing = async () => {
     if (!selectedFile) {
       alert("Veuillez d'abord sélectionner un fichier !");
@@ -151,12 +194,17 @@ function App() {
   };
 
   const handleParamChange = (param: keyof VegetationParams, value: string) => {
-    setParams({
+    const newParams = {
       ...params,
       [param]: parseFloat(value),
-    });
+    };
+    setParams(newParams);
+    if (savedParams) {
+      setHasChanges(!paramsAreEqual(newParams, savedParams));
+    } else {
+      setHasChanges(true);
+    }
   };
-
   const toggleTypeHelp = () => setShowTypeHelp(!showTypeHelp);
   const togglePoissonInfo = () => setShowPoissonInfo(!showPoissonInfo);
   const toggleParamsGuidelines = () =>
@@ -178,10 +226,12 @@ function App() {
             params={params}
             handleParamChange={handleParamChange}
             loadDefaultParams={loadDefaultParams}
+            saveUserParams={saveUserParams}
             vegetationType={vegetationType}
             isProcessing={isProcessing}
             toggleTypeHelp={toggleTypeHelp}
             toggleParamsGuidelines={toggleParamsGuidelines}
+            hasChanges={hasChanges}
           />
 
           <FileOperations
@@ -210,21 +260,12 @@ function App() {
           />
         </div>
       </div>
+      {/* Popups */}
+      <PoissonInfoPopup isOpen={showPoissonInfo} onClose={togglePoissonInfo} />
 
-      {/* Modals */}
-      <TypeHelpModal
-        showTypeHelp={showTypeHelp}
-        toggleTypeHelp={toggleTypeHelp}
-      />
-
-      <PoissonInfoModal
-        showPoissonInfo={showPoissonInfo}
-        togglePoissonInfo={togglePoissonInfo}
-      />
-
-      <ParamsGuidelinesModal
-        showParamsGuidelines={showParamsGuidelines}
-        toggleParamsGuidelines={toggleParamsGuidelines}
+      <ParamsGuidelinesPopup
+        isOpen={showParamsGuidelines}
+        onClose={toggleParamsGuidelines}
       />
     </div>
   );
