@@ -1,14 +1,17 @@
-#![allow(unused_imports)]
-use directories::UserDirs;
 use geo::Point;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::{self, File};
+use std::fs::{File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+
+#[cfg(unix)]
 use xdg_user::UserDirs as XdgUserDirs;
+
+#[cfg(windows)]
+use directories::UserDirs;
 
 pub struct VegetationProcessingState {
     pub processed_rows: Mutex<usize>,
@@ -75,7 +78,7 @@ impl Default for Settings {
             {
                 let user_dirs = UserDirs::new().unwrap();
                 user_dirs
-                    .downloads()
+                    .download_dir()
                     .unwrap()
                     .to_path_buf()
                     .to_string_lossy()
