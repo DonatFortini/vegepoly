@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { documentDir } from "@tauri-apps/api/path";
 import "./App.css";
 
@@ -25,11 +26,12 @@ import {
 function App() {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
+  const [polygonCount, setPolygonCount] = useState<number>(0);
+  const [isLoadingFile, setIsLoadingFile] = useState<boolean>(false);
   const [vegetationType, setVegetationType] = useState<number>(1);
   const [params, setParams] = useState<VegetationParams>({
     vegetation_type: 1,
     density: 7.0,
-    variation: 1.0,
     type_value: 10,
   });
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
@@ -38,6 +40,10 @@ function App() {
     total_rows: 0,
     created_items: 0,
     errors: [],
+    percentage: 0,
+    elapsed_seconds: undefined,
+    estimated_remaining_seconds: undefined,
+    is_finished: false,
   });
   const [result, setResult] = useState<string | null>(null);
   const [showTypeHelp, setShowTypeHelp] = useState<boolean>(false);
@@ -71,35 +77,47 @@ function App() {
   }, [vegetationType]);
 
   useEffect(() => {
-    let intervalId: number | null = null;
+    let unlisten: (() => void) | null = null;
+    let unlistenFinished: (() => void) | null = null;
+    let unlistenError: (() => void) | null = null;
 
-    if (isProcessing) {
-      intervalId = window.setInterval(async () => {
-        try {
-          const progressInfo = await invoke<ProgressInfo>(
-            "get_vegetation_progress"
-          );
+    const setupListeners = async () => {
+      unlistenFinished = await listen<string>('vegetation-export-finished', (event) => {
+        setResult(event.payload);
+        setIsProcessing(false);
+      });
+
+      unlistenError = await listen<string>('vegetation-export-error', (event) => {
+        console.error("Processing failed:", event.payload);
+        alert("Une erreur est survenue pendant le traitement.");
+        setIsProcessing(false);
+      });
+
+      try {
+        unlisten = await listen<ProgressInfo>('vegetation-progress', (event) => {
+          const progressInfo = event.payload;
           setProgress(progressInfo);
 
-          if (
+          if (progressInfo.is_finished || (
             progressInfo.current_row === progressInfo.total_rows &&
             progressInfo.total_rows > 0
-          ) {
+          )) {
             setIsProcessing(false);
-            clearInterval(intervalId!);
           }
-        } catch (error) {
-          console.error("Erreur lors de l'obtention de la progression:", error);
-        }
-      }, 500);
-    } else if (intervalId) {
-      clearInterval(intervalId);
-    }
+        });
+      } catch (error) {
+        console.error("Failed to set up progress event listener:", error);
+      }
+    };
+
+    setupListeners();
 
     return () => {
-      if (intervalId) clearInterval(intervalId);
+      if (unlisten) unlisten();
+      if (unlistenFinished) unlistenFinished();
+      if (unlistenError) unlistenError();
     };
-  }, [isProcessing]);
+  }, []);
 
   const selectFile = async () => {
     try {
@@ -119,6 +137,23 @@ function App() {
         setSelectedFile(selected);
         const parts = selected.split(/[/\\]/);
         setFileName(parts[parts.length - 1]);
+
+        setIsLoadingFile(true);
+        try {
+          const polygons = await invoke<any[]>("parse_csv_file", {
+            filePath: selected,
+          });
+          setPolygonCount(polygons.length);
+          console.log(`Loaded ${polygons.length} polygons from CSV`);
+        } catch (error) {
+          console.error("Erreur lors du parsing du fichier CSV:", error);
+          alert(`Erreur lors du chargement du fichier: ${error}`);
+          setPolygonCount(0);
+          setSelectedFile(null);
+          setFileName(null);
+        } finally {
+          setIsLoadingFile(false);
+        }
       }
     } catch (error) {
       console.error("Erreur lors de la sélection du fichier:", error);
@@ -161,7 +196,7 @@ function App() {
   };
 
   const executeProcessing = async () => {
-    if (!selectedFile) {
+    if (!selectedFile || polygonCount === 0) {
       alert("Veuillez d'abord sélectionner un fichier !");
       return;
     }
@@ -173,12 +208,20 @@ function App() {
       total_rows: 0,
       created_items: 0,
       errors: [],
+      percentage: 0,
+      elapsed_seconds: undefined,
+      estimated_remaining_seconds: undefined,
+      is_finished: false,
     });
 
     try {
-      const output = await invoke<string>("generate_vegetation_from_csv", {
-        csvPath: selectedFile,
-        params: {
+      const polygons = await invoke<any[]>("parse_csv_file", {
+        filePath: selectedFile,
+      });
+
+      const output = await invoke<string>("export_results", {
+        data: polygons,
+        param: {
           ...params,
           vegetation_type: vegetationType,
         },
@@ -188,7 +231,6 @@ function App() {
     } catch (error) {
       console.error("Erreur lors du traitement du fichier:", error);
       alert(`Erreur: ${error}`);
-    } finally {
       setIsProcessing(false);
     }
   };
@@ -205,6 +247,7 @@ function App() {
       setHasChanges(true);
     }
   };
+
   const toggleTypeHelp = () => setShowTypeHelp(!showTypeHelp);
   const togglePoissonInfo = () => setShowPoissonInfo(!showPoissonInfo);
   const toggleParamsGuidelines = () =>
@@ -238,7 +281,7 @@ function App() {
             selectFile={selectFile}
             executeProcessing={executeProcessing}
             fileName={fileName}
-            isProcessing={isProcessing}
+            isProcessing={isProcessing || isLoadingFile}
             selectedFile={selectedFile}
           />
         </div>
@@ -255,8 +298,10 @@ function App() {
             result={result}
             selectedFile={selectedFile}
             isProcessing={isProcessing}
+            isLoadingFile={isLoadingFile}
             params={params}
             vegetationType={vegetationType}
+            polygonCount={polygonCount}
           />
         </div>
       </div>

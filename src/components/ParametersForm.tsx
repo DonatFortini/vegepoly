@@ -104,23 +104,6 @@ const ParametersForm = ({
           </p>
         </div>
 
-        <div>
-          <label className="block mb-1 font-medium">
-            Variation (décalage aléatoire)
-          </label>
-          <input
-            type="number"
-            min="0"
-            step="0.1"
-            value={params.variation}
-            onChange={(e) => handleParamChange("variation", e.target.value)}
-            disabled={isProcessing}
-            className="w-full px-3 py-2 border rounded-md"
-          />
-          <p className="text-sm mt-1" id="medium-visibility">
-            Ajoute un caractère aléatoire naturel au placement des points
-          </p>
-        </div>
 
         <div>
           <select

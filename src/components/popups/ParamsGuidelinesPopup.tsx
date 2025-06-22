@@ -23,7 +23,6 @@ const ParamsGuidelinesPopup = ({
             <tr className="bg-gray-50">
               <th className="px-3 py-2 text-left border-b">Type</th>
               <th className="px-3 py-2 text-left border-b">Densité</th>
-              <th className="px-3 py-2 text-left border-b">Variation</th>
             </tr>
           </thead>
           <tbody>
@@ -55,14 +54,7 @@ const ParamsGuidelinesPopup = ({
           </p>
         </div>
 
-        <div>
-          <h6 className="font-semibold">Variation</h6>
-          <p>
-            Décalage aléatoire ajouté aux points. Augmente le caractère naturel
-            de la distribution.
-          </p>
-        </div>
-
+       
         <div>
           <h6 className="font-semibold">Type</h6>
           <p>

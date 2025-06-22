@@ -1,42 +1,26 @@
 {
   "default_vegetation_params": {
-    "1": {
-      "vegetation_type": 1,
-      "density": 28.0,
-      "variation": 1.0,
-      "type_value": 10
+    "3": {
+      "vegetation_type": 3,
+      "density": 3.0,
+      "type_value": 30
     },
     "2": {
       "vegetation_type": 2,
       "density": 5.0,
-      "variation": 0.5,
       "type_value": 20
     },
-    "3": {
-      "vegetation_type": 3,
-      "density": 3.0,
-      "variation": 0.3,
-      "type_value": 30
+    "1": {
+      "vegetation_type": 1,
+      "density": 28.0,
+      "type_value": 10
     }
   },
   "user_vegetation_params": {
-    "2": {
-      "vegetation_type": 2,
-      "density": 5.0,
-      "variation": 1.0,
-      "type_value": 20
-    },
     "1": {
       "vegetation_type": 1,
-      "density": 28.0,
-      "variation": 8.0,
+      "density": 27.0,
       "type_value": 10
-    },
-    "3": {
-      "vegetation_type": 3,
-      "density": 3.0,
-      "variation": 0.3,
-      "type_value": 30
     }
   },
   "export_path": "/home/dodo/Téléchargements"

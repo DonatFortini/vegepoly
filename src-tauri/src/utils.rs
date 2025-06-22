@@ -1,29 +1,122 @@
-use geo::{Coord, Polygon};
+use csv::ReaderBuilder;
+use geo::Geometry;
+use geo::Polygon;
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Write};
+use std::io::BufWriter;
+use std::io::Write;
+use tauri::Emitter;
 
-use crate::Settings;
-use crate::models::VegetationParams;
+use tauri::{AppHandle, State};
+use wkt::Wkt;
 
-/// Compte le nombre de lignes dans un fichier.
-///
-/// # Arguments
-/// * `file_path` - Chemin du fichier à compter
-///
-/// # Retours
-/// Le nombre de lignes non vides dans le fichier ou une erreur
-pub fn count_file_rows(file_path: &str) -> Result<usize, Box<dyn Error>> {
-    let file = File::open(file_path)?;
-    let mut content = Vec::new();
-    let mut reader = BufReader::new(file);
-    std::io::Read::read_to_end(&mut reader, &mut content)?;
-    let content_str = String::from_utf8_lossy(&content).into_owned();
-    let lines: Vec<&str> = content_str.split('\n').collect();
+use crate::models::processing::VegetationProcessingState;
+use crate::models::settings::Settings;
+use crate::models::vegetations::VegetationParams;
+use crate::sampling::fill_polygon;
 
-    // Soustrait 1 pour l'en-tête si le fichier n'est pas vide
-    let count = if lines.len() > 1 { lines.len() - 1 } else { 0 };
-    Ok(count)
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SimplePoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SimplePolygon {
+    pub exterior: Vec<SimplePoint>,
+    pub interiors: Vec<Vec<SimplePoint>>,
+}
+
+#[tauri::command]
+pub fn parse_csv_file(file_path: &str) -> Result<Vec<Polygon<f64>>, String> {
+    let mut reader = ReaderBuilder::new()
+        .delimiter(b'\t')
+        .has_headers(true)
+        .from_path(file_path)
+        .map_err(|e| format!("Failed to open file: {}", e))?;
+    let mut polygons = Vec::new();
+
+    for result in reader.records() {
+        let record = result.map_err(|e| format!("CSV read error: {}", e))?;
+        if let Some(geometry_field) = record.get(0) {
+            let wkt: Wkt<f64> = geometry_field
+                .parse()
+                .map_err(|_| format!("Invalid WKT format: {}", geometry_field))?;
+            let geometry: Geometry<f64> = wkt
+                .try_into()
+                .map_err(|_| format!("Cannot convert WKT to geo geometry: {}", geometry_field))?;
+            if let Geometry::Polygon(polygon) = geometry {
+                polygons.push(polygon);
+            } else {
+                return Err(format!("WKT is not a Polygon: {}", geometry_field));
+            }
+        } else {
+            return Err("Missing geometry field in record".to_string());
+        }
+    }
+    Ok(polygons)
+}
+
+#[tauri::command]
+pub fn get_preview_data(
+    file_path: &str,
+    param: VegetationParams,
+) -> Result<(SimplePolygon, Vec<SimplePoint>), String> {
+    let polygons = parse_csv_file(file_path)?;
+
+    if polygons.is_empty() {
+        return Err("No polygons found in file".to_string());
+    }
+
+    let first_polygon = &polygons[0];
+
+    let exterior: Vec<SimplePoint> = first_polygon
+        .exterior()
+        .coords()
+        .map(|coord| SimplePoint {
+            x: coord.x,
+            y: coord.y,
+        })
+        .collect();
+
+    let interiors: Vec<Vec<SimplePoint>> = first_polygon
+        .interiors()
+        .iter()
+        .map(|interior| {
+            interior
+                .coords()
+                .map(|coord| SimplePoint {
+                    x: coord.x,
+                    y: coord.y,
+                })
+                .collect()
+        })
+        .collect();
+
+    let simple_polygon = SimplePolygon {
+        exterior,
+        interiors,
+    };
+
+    let point_strings = fill_polygon(first_polygon.clone(), param)?;
+    let preview_points: Vec<SimplePoint> = point_strings
+        .iter()
+        .filter_map(|point_str| {
+            let parts: Vec<&str> = point_str.trim().split('\t').collect();
+            if parts.len() >= 2 {
+                if let (Ok(x), Ok(y)) = (
+                    parts[0].trim().parse::<f64>(),
+                    parts[1].trim().parse::<f64>(),
+                ) {
+                    return Some(SimplePoint { x, y });
+                }
+            }
+            None
+        })
+        .collect();
+
+    Ok((simple_polygon, preview_points))
 }
 
 /// Écrit l'en-tête dans le fichier de sortie.
@@ -38,224 +131,79 @@ pub fn write_header(writer: &mut BufWriter<File>) -> Result<(), Box<dyn Error>> 
     Ok(())
 }
 
-/// Transforme une chaîne représentant un polygone dans un format adapté à l'analyse.
-///
-/// # Arguments
-/// * `polygon_str` - Chaîne représentant un polygone au format WKT
-///
-/// # Retours
-/// Une chaîne transformée adaptée pour l'analyse ultérieure
-pub fn transform_polygon_string(polygon_str: &str) -> String {
-    let mut result = polygon_str.to_string();
-
-    // Transforme les formats POLYGON et MULTIPOLYGON en format Polygon
-    if result.contains("POLYGON((") {
-        result = result.replace("POLYGON((", "Polygon([(");
-    }
-    if result.contains("MULTIPOLYGON((") {
-        result = result.replace("MULTIPOLYGON((", "Polygon([(");
-    }
-
-    // Ajuste la syntaxe
-    result = result.replace("))", ")])");
-    result = result.replace("))", ")])");
-    result = result.replace(",", "),(");
-    result = result.replace(" ", ",");
-
-    // Tronque si nécessaire
-    if let Some(idx) = result.find(")])") {
-        if let Some(rest) = result[idx + 3..].find(")])") {
-            result = result[0..idx + 3 + rest + 3].to_string();
-        }
-    }
-
-    result
-}
-
-/// Extrait un polygone à partir d'une chaîne transformée.
-///
-/// # Arguments
-/// * `str` - Chaîne transformée représentant un polygone
-///
-/// # Retours
-/// Une option contenant le polygone extrait ou None si l'extraction échoue
-pub fn extract_polygon_from_string(str: &str) -> Option<Polygon<f64>> {
-    // Vérifie si la chaîne contient un format de polygone valide
-    if !str.contains("Polygon([(") {
-        return None;
-    }
-
-    // Extrait la partie interne du polygone
-    let start_idx = str.find("Polygon([(").unwrap_or(0) + "Polygon([(".len();
-    let end_idx = str.rfind(")])").unwrap_or(str.len());
-    if start_idx >= end_idx {
-        return None;
-    }
-
-    let inner = &str[start_idx..end_idx];
-    let coord_pairs: Vec<&str> = inner.split("),(").collect();
-
-    // Analyse les paires de coordonnées
-    let mut coords = Vec::new();
-    for pair in coord_pairs {
-        let parts: Vec<&str> = pair.split(',').collect();
-        if parts.len() == 2 {
-            match (
-                parts[0].trim().parse::<f64>(),
-                parts[1].trim().parse::<f64>(),
-            ) {
-                (Ok(x), Ok(y)) => coords.push(Coord { x, y }),
-                _ => return None,
-            }
-        } else {
-            return None;
-        }
-    }
-
-    // Vérifie si des coordonnées ont été extraites
-    if coords.is_empty() {
-        return None;
-    }
-
-    // Ferme le polygone si nécessaire
-    if coords.len() > 1 && coords[0] != *coords.last().unwrap() {
-        coords.push(coords[0]);
-    }
-
-    Some(Polygon::new(coords.into(), vec![]))
-}
-
-/// Analyse une chaîne WKT (Well-Known Text) en un polygone.
-///
-/// # Arguments
-/// * `polygon_str` - Chaîne WKT représentant un polygone
-///
-/// # Retours
-/// Le polygone analysé ou une erreur
-pub fn parse_polygon_wkt(polygon_str: &str) -> Result<Polygon<f64>, Box<dyn Error>> {
-    let mut cleaned = polygon_str.to_string();
-
-    // Vérifie le format
-    if !cleaned.contains("POLYGON((") && !cleaned.contains("MULTIPOLYGON((") {
-        return Err("Invalid format".into());
-    }
-
-    // Nettoie la chaîne
-    if cleaned.contains("POLYGON((") {
-        cleaned = cleaned.replace("POLYGON((", "");
-    } else if cleaned.contains("MULTIPOLYGON((") {
-        cleaned = cleaned.replace("MULTIPOLYGON((", "");
-    }
-    cleaned = cleaned.replace("))", "");
-
-    // Analyse les coordonnées
-    let coords_str: Vec<&str> = cleaned.split(',').collect();
-    let mut coords: Vec<Coord<f64>> = Vec::new();
-
-    for coord_pair in coords_str {
-        let parts: Vec<&str> = coord_pair.split_whitespace().collect();
-        if parts.len() == 2 {
-            match (parts[0].parse::<f64>(), parts[1].parse::<f64>()) {
-                (Ok(x), Ok(y)) => coords.push(Coord { x, y }),
-                _ => println!("Warning: Could not parse coordinates from: {}", coord_pair),
-            }
-        } else {
-            println!("Warning: Invalid coordinate pair format: {}", coord_pair);
-        }
-    }
-
-    // Vérifie si des coordonnées ont été extraites
-    if coords.is_empty() {
-        return Err("Empty polygon".into());
-    }
-
-    // Ferme le polygone si nécessaire
-    if coords.len() > 1 && coords[0] != *coords.last().unwrap() {
-        coords.push(coords[0]);
-    }
-
-    Ok(Polygon::new(coords.into(), vec![]))
-}
-
-/// Calcule les limites d'un polygone.
-///
-/// # Arguments
-/// * `polygon` - Le polygone dont on veut calculer les limites
-///
-/// # Retours
-/// Un tuple (min_x, min_y, max_x, max_y) représentant les limites du polygone
-pub fn calculate_polygon_bounds(polygon: &Polygon<f64>) -> (f64, f64, f64, f64) {
-    let exterior = polygon.exterior();
-    let coords = exterior.coords();
-
-    // Initialise les valeurs min/max
-    let mut min_x = f64::MAX;
-    let mut min_y = f64::MAX;
-    let mut max_x = f64::MIN;
-    let mut max_y = f64::MIN;
-
-    // Met à jour les min/max pour chaque coordonnée
-    for coord in coords {
-        min_x = min_x.min(coord.x);
-        min_y = min_y.min(coord.y);
-        max_x = max_x.max(coord.x);
-        max_y = max_y.max(coord.y);
-    }
-
-    (min_x, min_y, max_x, max_y)
-}
-
-/// Commande Tauri pour obtenir les paramètres par défaut pour un type de végétation.
-///
-/// # Arguments
-/// * `vegetation_type` - Type de végétation (1: Arbres, 2: Surfaces, 3: Roccailles)
-///
-/// # Retours
-/// Les paramètres par défaut pour le type de végétation spécifié
 #[tauri::command]
-pub fn get_default_vegetation_params(vegetation_type: u8) -> VegetationParams {
-    let settings = Settings::global();
-    let settings_guard = settings.lock().unwrap();
-    match settings_guard.get_default_vegetation_params(vegetation_type as i8) {
-        Some(params) => params,
-        None => VegetationParams {
-            vegetation_type,
-            density: 5.0,
-            variation: 0.5,
-            type_value: 10,
+pub fn export_results(
+    data: Vec<Polygon<f64>>,
+    param: VegetationParams,
+    state: State<'_, VegetationProcessingState>,
+    app_handle: AppHandle,
+) {
+    let state_arc = std::sync::Arc::new((*state.inner()).clone());
+    let param = param.clone();
+    let handle = app_handle.clone();
+
+    std::thread::spawn(
+        move || match run_export(data, param, state_arc, handle.clone()) {
+            Ok(filename) => {
+                let _ = handle.emit("vegetation-export-finished", &filename);
+            }
+            Err(err_msg) => {
+                eprintln!("Export failed: {}", err_msg);
+                let _ = handle.emit("vegetation-export-error", &err_msg);
+            }
         },
+    );
+}
+
+fn run_export(
+    data: Vec<Polygon<f64>>,
+    param: VegetationParams,
+    state: std::sync::Arc<VegetationProcessingState>,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    state.initialize(data.len(), &app_handle);
+
+    let now = chrono::Local::now();
+    let output_filename = format!("Export {}.txt", now.format("%d-%m-%Y %Hh%M-%S"));
+    let export_path = Settings::with_read(|s| s.export_path.clone());
+
+    let mut writer = std::io::BufWriter::new(
+        std::fs::File::create(export_path.join(&output_filename))
+            .map_err(|e| format!("Failed to create file: {}", e))?,
+    );
+
+    write_header(&mut writer).map_err(|e| format!("Failed to write header: {}", e))?;
+    let cloned_param = param.clone();
+
+    let mut total_created_items = 0;
+
+    for (index, polygon) in data.iter().enumerate() {
+        let polygon_points = fill_polygon(polygon.clone(), cloned_param.clone());
+        match polygon_points {
+            Ok(points) => {
+                let points_len = points.len();
+                for point in points {
+                    writer
+                        .write_all(point.as_bytes())
+                        .map_err(|e| format!("Failed to write to file: {}", e))?;
+                }
+                total_created_items += points_len;
+                state.update_created_items(total_created_items, &app_handle);
+            }
+            Err(e) => {
+                let error_msg = format!("Error filling polygon {}: {}", index + 1, e);
+                state.add_error(error_msg, &app_handle);
+            }
+        }
+
+        state.update_processed_rows(index + 1, &app_handle);
     }
-}
 
-#[tauri::command]
-/// Commande Tauri pour définir les paramètres de végétation de l'utilisateur.
-///
-/// # Arguments
-/// * `vegetation_type` - Type de végétation (1: Arbres, 2: Surfaces, 3: Roccailles)
-/// * `params` - Paramètres de végétation à définir
-///
-/// # Retours
-/// Ok(()) en cas de succès ou une erreur
-pub fn set_user_vegetation_params(
-    vegetation_type: i8,
-    params: VegetationParams,
-) -> Result<(), String> {
-    let settings = Settings::global();
-    let mut settings_guard = settings.lock().unwrap();
-    settings_guard.set_user_vegetation_params(vegetation_type, params);
-    Ok(())
-}
+    state.set_finished(&app_handle);
 
-#[tauri::command]
-/// Commande Tauri pour obtenir les paramètres de végétation de l'utilisateur.
-///
-/// # Arguments
-/// * `vegetation_type` - Type de végétation (1: Arbres, 2: Surfaces, 3: Roccailles)
-///
-/// # Retours
-/// Option<VegetationParams> contenant les paramètres de végétation de l'utilisateur ou None si non définis
-pub fn get_user_vegetation_params(vegetation_type: i8) -> Option<VegetationParams> {
-    let settings = Settings::global();
-    let settings_guard = settings.lock().unwrap();
-    settings_guard.get_user_vegetation_params(vegetation_type)
+    writer
+        .flush()
+        .map_err(|e| format!("Failed to flush writer: {}", e))?;
+
+    Ok(output_filename)
 }

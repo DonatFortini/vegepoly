@@ -43,7 +43,6 @@ export function paramsAreEqual(
 ): boolean {
   return (
     params1.density === params2.density &&
-    params1.variation === params2.variation &&
     params1.type_value === params2.type_value
   );
 }

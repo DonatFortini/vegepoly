@@ -10,7 +10,7 @@ VégéPoly permet de générer des points de végétation (arbres, surfaces, roc
 
 - Importation de fichiers CSV contenant des données de polygones
 - Génération de points de végétation à l'aide de l'algorithme d'échantillonnage Poisson Disc
-- Contrôle des paramètres de densité et de variation
+- Contrôle du paramètre de densité 
 - Support pour différents types de végétation (arbres, surfaces, roccailles)
 - Prévisualisation des polygones et des points générés
 - Exportation des résultats dans un format compatible
@@ -37,7 +37,7 @@ cargo tauri dev
 
 1. Sélectionnez un fichier CSV contenant des données de polygone
 2. Choisissez le type de végétation à générer
-3. Ajustez les paramètres de densité et de variation
+3. Ajustez le paramètre de densité 
 4. Visualisez les polygones et les points générés
 5. Exportez les résultats dans un format txt
 

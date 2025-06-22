@@ -1,45 +1,35 @@
-import { invoke } from "@tauri-apps/api/core";
-import { VegetationParams } from "../types";
-
 export interface Point {
   x: number;
   y: number;
 }
 
-export interface PolygonData {
-  polygon: Point[];
-  points: Point[];
+export interface Polygon {
+  exterior: Point[];
+  interiors: Point[][];
 }
 
-export async function extractPolygonData(
-  filePath: string,
-  params: VegetationParams
-): Promise<PolygonData> {
-  try {
-    const data = await invoke<PolygonData>("extract_polygon_data", {
-      csvPath: filePath,
-      params,
-    });
+// Utility function to parse WKT strings (kept for potential future use)
+export function parsePolygonFromWkt(wktString: string): Polygon {
+  const coordsMatch = wktString.match(/POLYGON\s*\(\((.*?)\)\)/);
+  if (!coordsMatch || !coordsMatch[1]) return { exterior: [], interiors: [] };
 
-    return data;
-  } catch (error) {
-    console.error(
-      "Erreur lors de l'extraction des données du polygone:",
-      error
-    );
-    return { polygon: [], points: [] };
-  }
-}
+  // Handles only exterior ring for now
+  const rings = wktString
+    .replace(/POLYGON\s*\(\(/, "")
+    .replace(/\)\)$/, "")
+    .split("),(");
 
-export function parsePolygonFromWkt(wktString: string): Point[] {
-  const coordsMatch = wktString.match(/POLYGON\(\((.*?)\)\)/);
-  if (!coordsMatch || !coordsMatch[1]) return [];
+  const parseRing = (ring: string): Point[] =>
+    ring
+      .split(",")
+      .map((pair) => pair.trim())
+      .map((pair) => {
+        const [x, y] = pair.split(" ").map(parseFloat);
+        return { x, y };
+      });
 
-  const coordsString = coordsMatch[1];
-  const coordPairs = coordsString.split(",").map((pair) => pair.trim());
+  const exterior = parseRing(rings[0]);
+  const interiors = rings.slice(1).map(parseRing);
 
-  return coordPairs.map((pair) => {
-    const [x, y] = pair.split(" ").map(parseFloat);
-    return { x, y };
-  });
+  return { exterior, interiors };
 }

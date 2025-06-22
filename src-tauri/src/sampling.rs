@@ -1,5 +1,9 @@
-use geo::{Contains, Point, Polygon};
+use core::f64;
+
+use geo::{BoundingRect, Contains, Point, Polygon};
 use rand::Rng;
+
+use crate::models::vegetations::VegetationParams;
 
 /// Structure qui implémente l'algorithme d'échantillonnage de distribution spatiale.
 /// Utilise une grille pour optimiser la détection de voisinage lors de l'échantillonnage.
@@ -165,8 +169,8 @@ impl SpatialDistributionSampler {
         let grid_y = ((point.y() - min_y) / self.cell_size) as usize;
 
         // Vérifie uniquement les cellules voisines pour optimiser la recherche
-        let start_x = if grid_x > 1 { grid_x - 1 } else { 0 };
-        let start_y = if grid_y > 1 { grid_y - 1 } else { 0 };
+        let start_x = grid_x.saturating_sub(1);
+        let start_y = grid_y.saturating_sub(1);
         let end_x = (grid_x + 1).min(self.grid_width - 1);
         let end_y = (grid_y + 1).min(self.grid_height - 1);
 
@@ -193,4 +197,44 @@ impl SpatialDistributionSampler {
 
         true
     }
+}
+
+#[tauri::command]
+pub fn fill_polygon(data: Polygon<f64>, param: VegetationParams) -> Result<Vec<String>, String> {
+    if param.density <= 0.0 {
+        return Err("Density must be positive.".to_string());
+    }
+    let bounding_rect = data
+        .bounding_rect()
+        .ok_or("Polygon has no bounding rectangle.")?;
+    let bounds = (
+        bounding_rect.min().x,
+        bounding_rect.min().y,
+        bounding_rect.max().x,
+        bounding_rect.max().y,
+    );
+    let mut sampler = SpatialDistributionSampler::new(param.density, bounds);
+    let points = sampler.generate_distribution(&data);
+
+    println!(
+        "Generated {} points using spatial distribution algorithm",
+        points.len()
+    );
+
+    if points.is_empty() {
+        return Err("No points could be generated for the given polygon and density.".to_string());
+    }
+
+    let mut result = Vec::new();
+
+    for point in &points {
+        let end_row = format!(
+            "									20				20096																		0	{}	",
+            param.type_value
+        );
+        let wkt_string = format!("       {}\t       {}{}\n", point.x(), point.y(), end_row);
+        result.push(wkt_string);
+    }
+
+    Ok(result)
 }

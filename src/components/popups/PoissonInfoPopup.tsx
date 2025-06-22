@@ -74,7 +74,6 @@ const PoissonInfoPopup = ({ isOpen, onClose }: PoissonInfoPopupProps) => {
             <li>
               Conservation uniquement des points respectant la distance minimale
             </li>
-            <li>Ajout d'un léger décalage pour plus de naturel (variation)</li>
           </ol>
         </div>
 
@@ -92,7 +91,7 @@ const PoissonInfoPopup = ({ isOpen, onClose }: PoissonInfoPopupProps) => {
 
       <p className="mt-3 text-sm text-gray-600">
         Les paramètres <strong>Densité</strong> (distance minimale entre points)
-        et <strong>Variation</strong> (décalage aléatoire) contrôlent
+        contrôle
         l'apparence finale de la distribution.
       </p>
     </Popup>

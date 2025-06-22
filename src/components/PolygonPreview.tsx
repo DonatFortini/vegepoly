@@ -1,26 +1,39 @@
 import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import Card from "./shared/Card";
-import { extractPolygonData, Point } from "../api/polygon-api";
 import { VegetationParams } from "../types";
+
+interface Point {
+  x: number;
+  y: number;
+}
+
+interface Polygon {
+  exterior: Point[];
+  interiors: Point[][];
+}
 
 interface PolygonPreviewProps {
   result: string | null;
   selectedFile: string | null;
   isProcessing: boolean;
+  isLoadingFile: boolean;
   params: VegetationParams;
   vegetationType: number;
+  polygonCount: number;
 }
 
 const PolygonPreview = ({
   result,
   selectedFile,
   isProcessing,
+  isLoadingFile,
   params,
   vegetationType,
+  polygonCount,
 }: PolygonPreviewProps) => {
-  const [polygon, setPolygon] = useState<Point[]>([]);
+  const [polygon, setPolygon] = useState<Polygon>({ exterior: [], interiors: [] });
   const [points, setPoints] = useState<Point[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [showPoints, setShowPoints] = useState<boolean>(true);
 
@@ -29,41 +42,32 @@ const PolygonPreview = ({
     x: 0,
     y: 0,
   });
-  const [_bounds, setBounds] = useState<{
-    minX: number;
-    minY: number;
-    maxX: number;
-    maxY: number;
-  }>({
-    minX: 0,
-    minY: 0,
-    maxX: 0,
-    maxY: 0,
-  });
 
   useEffect(() => {
-    if (selectedFile && !isProcessing) {
-      const loadPolygonData = async () => {
-        setIsLoading(true);
+    if (selectedFile && polygonCount > 0 && !isLoadingFile && !isProcessing) {
+      const loadPolygonAndPoints = async () => {
         setError(null);
 
         try {
-          const data = await extractPolygonData(selectedFile, {
-            ...params,
-            vegetation_type: vegetationType,
+          const [polygonData, previewPoints] = await invoke<[Polygon, Point[]]>("get_preview_data", {
+            filePath: selectedFile,
+            param: {
+              ...params,
+              vegetation_type: vegetationType,
+            },
           });
 
-          if (data.polygon.length > 0) {
-            setPolygon(data.polygon);
+          setPolygon(polygonData);
+          setPoints(previewPoints);
 
-            const xValues = data.polygon.map((p) => p.x);
-            const yValues = data.polygon.map((p) => p.y);
+          const allPolygonPoints = [...polygonData.exterior, ...polygonData.interiors.flat()];
+          if (allPolygonPoints.length > 0) {
+            const xValues = allPolygonPoints.map((p) => p.x);
+            const yValues = allPolygonPoints.map((p) => p.y);
             const minX = Math.min(...xValues);
             const maxX = Math.max(...xValues);
             const minY = Math.min(...yValues);
             const maxY = Math.max(...yValues);
-
-            setBounds({ minX, minY, maxX, maxY });
 
             const width = maxX - minX;
             const height = maxY - minY;
@@ -76,70 +80,44 @@ const PolygonPreview = ({
 
             setOffset({
               x: (containerWidth - width * newScale) / 2 - minX * newScale + 20,
-              y:
-                (containerHeight - height * newScale) / 2 -
-                minY * newScale +
-                20,
+              y: (containerHeight - height * newScale) / 2 - minY * newScale + 20,
             });
-
-            if (data.points.length > 0) {
-              setPoints(data.points);
-            } else {
-              setPoints([]);
-            }
-          } else {
-            setError("Aucun polygone trouvé dans le fichier");
           }
+
         } catch (error) {
-          console.error(
-            "Erreur lors du chargement des données de polygone:",
-            error
-          );
+          console.error("Erreur lors du chargement des données:", error);
           setError("Erreur lors du chargement des données");
-        } finally {
-          setIsLoading(false);
+          setPolygon({ exterior: [], interiors: [] });
+          setPoints([]);
         }
       };
 
-      loadPolygonData();
+      loadPolygonAndPoints();
     }
-  }, [selectedFile, isProcessing, params, vegetationType]);
+  }, [selectedFile, polygonCount, isLoadingFile, isProcessing, params, vegetationType]);
 
   useEffect(() => {
-    if (result && polygon.length > 0 && !isProcessing) {
-      const loadGeneratedPoints = async () => {
-        setIsLoading(true);
-        try {
-          const data = await extractPolygonData(selectedFile || "", {
-            ...params,
-            vegetation_type: vegetationType,
-          });
-
-          if (data.points.length > 0) {
-            setPoints(data.points);
-          }
-        } catch (error) {
-          console.error("Erreur lors du chargement des points générés:", error);
-          setError("Erreur lors du chargement des points générés");
-        } finally {
-          setIsLoading(false);
-        }
-      };
-
-      loadGeneratedPoints();
+    if (!selectedFile) {
+      setPolygon({ exterior: [], interiors: [] });
+      setPoints([]);
+      setError(null);
     }
-  }, [
-    result,
-    isProcessing,
-    selectedFile,
-    params,
-    vegetationType,
-    polygon.length,
-  ]);
+  }, [selectedFile]);
 
-  const polyPoints = polygon
+  const polyPoints = polygon.exterior
     .map((p) => `${p.x * scale + offset.x},${p.y * scale + offset.y}`)
     .join(" ");
+
+  const interiorsPolygons = polygon.interiors.map((ring, idx) => (
+    <polygon
+      key={idx}
+      points={ring.map((p) => `${p.x * scale + offset.x},${p.y * scale + offset.y}`).join(" ")}
+      fill="#fff"
+      stroke="#6B9080"
+      strokeWidth="1"
+      opacity="0.5"
+    />
+  ));
 
   return (
     <Card title="Prévisualisation" className="flex-shrink-0 mb-3">
@@ -151,21 +129,26 @@ const PolygonPreview = ({
               id="showPoints"
               checked={showPoints}
               onChange={(e) => setShowPoints(e.target.checked)}
-              disabled={isLoading || points.length === 0}
+              disabled={isLoadingFile || points.length === 0}
               className="mr-2"
             />
             <label htmlFor="showPoints" className="text-sm">
               Afficher les points
             </label>
           </div>
+          {polygonCount > 1 && (
+            <div className="text-xs text-gray-600">
+              Affichage du premier polygone ({polygonCount} total)
+            </div>
+          )}
         </div>
 
         <div className="w-full h-[300px] border border-gray-300 bg-white rounded-md overflow-hidden flex items-center justify-center">
-          {isLoading ? (
-            <div className="text-gray-500">Chargement en cours...</div>
+          {isLoadingFile ? (
+            <div className="text-gray-500">Chargement du fichier...</div>
           ) : error ? (
             <div className="text-red-500">{error}</div>
-          ) : polygon.length > 0 ? (
+          ) : polygon.exterior.length > 0 ? (
             <svg width="100%" height="100%" className="bg-gray-50">
               <polygon
                 points={polyPoints}
@@ -174,6 +157,7 @@ const PolygonPreview = ({
                 strokeWidth="2"
                 opacity="0.7"
               />
+              {interiorsPolygons}
               {showPoints &&
                 points.map((point, index) => (
                   <circle
@@ -190,21 +174,22 @@ const PolygonPreview = ({
               {isProcessing
                 ? "Génération en cours..."
                 : selectedFile
-                ? "Chargement du polygone..."
-                : "Sélectionnez un fichier CSV pour visualiser"}
+                  ? "Chargement du polygone..."
+                  : "Sélectionnez un fichier CSV pour visualiser"}
             </div>
           )}
         </div>
 
         <div className="mt-3 text-sm w-full" id="medium-visibility">
-          {isLoading ? (
+          {isLoadingFile ? (
             <p>Chargement des données...</p>
-          ) : points.length > 0 ? (
+          ) : polygonCount > 0 ? (
             <p>
-              Prévisualisation de {points.length} points de végétation générés
+              {polygonCount} polygone(s) chargé(s).{" "}
+              {points.length > 0 && `${points.length} points de végétation générés pour la prévisualisation.`}
             </p>
           ) : result ? (
-            <p>Le résultat a été généré mais les points ne sont pas chargés</p>
+            <p>Le résultat a été généré</p>
           ) : selectedFile ? (
             <p>Prêt à générer des points dans le polygone chargé</p>
           ) : (

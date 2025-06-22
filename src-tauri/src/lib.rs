@@ -1,30 +1,39 @@
 pub mod models;
-pub mod processing;
 pub mod sampling;
 pub mod utils;
 
-pub use models::{
-    PolygonData, Settings, VegetationParams, VegetationProcessingState, VegetationProgressInfo,
+pub use models::vegetations::{
+    get_default_vegetation_params, get_user_vegetation_params, set_user_vegetation_params,
 };
-pub use processing::{extract_polygon_data, generate_vegetation_from_csv, get_vegetation_progress};
-pub use utils::get_default_vegetation_params;
-use utils::{get_user_vegetation_params, set_user_vegetation_params};
+
+pub use models::settings::get_export_path;
+
+pub use utils::{export_results, get_preview_data, parse_csv_file};
+
+pub use sampling::fill_polygon;
+
+use crate::models::processing::{VegetationProcessingState, get_vegetation_progress};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let _settings = models::Settings::global();
-    let vegetation_state = models::VegetationProcessingState::new();
+    if let Err(e) = models::settings::Settings::init() {
+        eprintln!("Failed to initialize settings: {}", e);
+        std::process::exit(1);
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(vegetation_state)
+        .manage(VegetationProcessingState::new())
         .invoke_handler(tauri::generate_handler![
-            generate_vegetation_from_csv,
-            get_vegetation_progress,
             get_default_vegetation_params,
-            extract_polygon_data,
             get_user_vegetation_params,
             set_user_vegetation_params,
+            get_vegetation_progress,
+            fill_polygon,
+            parse_csv_file,
+            get_preview_data,
+            export_results,
+            get_export_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

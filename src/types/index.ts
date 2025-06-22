@@ -1,7 +1,6 @@
 export interface VegetationParams {
   vegetation_type: number;
   density: number;
-  variation: number;
   type_value: number;
 }
 
@@ -10,4 +9,8 @@ export interface ProgressInfo {
   total_rows: number;
   created_items: number;
   errors: string[];
+  percentage: number;
+  elapsed_seconds?: number;
+  estimated_remaining_seconds?: number;
+  is_finished: boolean;
 }
