@@ -16,11 +16,6 @@ use crate::models::processing::{VegetationProcessingState, get_vegetation_progre
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    if let Err(e) = models::settings::Settings::init() {
-        eprintln!("Failed to initialize settings: {}", e);
-        std::process::exit(1);
-    }
-
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(VegetationProcessingState::new())
@@ -35,6 +30,13 @@ pub fn run() {
             export_results,
             get_export_path
         ])
+        .setup(|app| {
+            if let Err(e) = models::settings::Settings::init(app.handle().clone()) {
+                eprintln!("Failed to initialize settings: {}", e);
+                std::process::exit(1);
+            }
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -1,22 +1,17 @@
-use serde::{Deserialize, Serialize};
+use directories::UserDirs;
+use rusqlite::{Connection, Result as SqliteResult, params};
 use std::collections::HashMap;
-use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, RwLock};
+use tauri::{AppHandle, Manager};
 use thiserror::Error;
-
-#[cfg(unix)]
-use xdg_user::UserDirs as XdgUserDirs;
-
-#[cfg(windows)]
-use directories::UserDirs;
 
 use crate::models::vegetations::VegetationParams;
 
 #[derive(Error, Debug)]
 pub enum SettingsError {
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
+    #[error("Database error: {0}")]
+    Database(#[from] rusqlite::Error),
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
     #[error("Configuration directory not found")]
@@ -25,38 +20,22 @@ pub enum SettingsError {
     InvalidVegetationType(i8),
     #[error("Invalid path: {0}")]
     InvalidPath(String),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 type Result<T> = std::result::Result<T, SettingsError>;
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct Settings {
-    pub default_vegetation_params: HashMap<i8, VegetationParams>,
-    pub user_vegetation_params: HashMap<i8, VegetationParams>,
-    pub export_path: PathBuf,
-
-    #[serde(skip)]
-    config_file_path: String,
+    db_path: PathBuf,
 }
 
 static SETTINGS_INSTANCE: OnceLock<Arc<RwLock<Settings>>> = OnceLock::new();
 
-impl Default for Settings {
-    fn default() -> Self {
-        let export_path = Self::get_default_export_path();
-
-        Settings {
-            default_vegetation_params: Self::create_default_vegetation_params(),
-            user_vegetation_params: HashMap::new(),
-            export_path,
-            config_file_path: "settings.json".to_string(),
-        }
-    }
-}
-
 impl Settings {
-    pub fn init() -> Result<()> {
-        let settings = Self::load_or_create_default()?;
+    pub fn init(app_handle: AppHandle) -> Result<()> {
+        let settings = Self::new(app_handle)?;
         SETTINGS_INSTANCE
             .set(Arc::new(RwLock::new(settings)))
             .map_err(|_| {
@@ -68,76 +47,99 @@ impl Settings {
         Ok(())
     }
 
-    pub fn with_read<F, R>(f: F) -> R
-    where
-        F: FnOnce(&Settings) -> R,
-    {
-        let instance = SETTINGS_INSTANCE
-            .get()
-            .expect("Settings not initialized. Call Settings::init() first.");
-        let settings = instance.read().unwrap();
-        f(&settings)
-    }
+    fn new(app_handle: AppHandle) -> Result<Self> {
+        let db_path = Self::get_database_path(&app_handle)?;
 
-    pub fn with_write<F, R>(f: F) -> Result<R>
-    where
-        F: FnOnce(&mut Settings) -> Result<R>,
-    {
-        let instance = SETTINGS_INSTANCE
-            .get()
-            .expect("Settings not initialized. Call Settings::init() first.");
-        let mut settings = instance.write().unwrap();
-        let result = f(&mut settings)?;
-        settings.save()?;
-        Ok(result)
-    }
-
-    fn load_or_create_default() -> Result<Self> {
-        let config_path = Self::get_config_file_path();
-
-        if std::path::Path::new(&config_path).exists() {
-            Self::load_from_file(&PathBuf::from(&config_path))
-        } else {
-            let settings = Settings {
-                config_file_path: config_path.clone(),
-                ..Self::default()
-            };
-            settings.save()?;
-            Ok(settings)
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent)?;
         }
-    }
-
-    fn load_from_file(path: &PathBuf) -> Result<Self> {
-        let contents = fs::read_to_string(path)?;
-        let mut settings: Settings = serde_json::from_str(&contents)?;
-        settings.config_file_path = path.to_string_lossy().to_string();
+        let settings = Settings { db_path };
+        settings.initialize_database()?;
         Ok(settings)
     }
 
-    fn save(&self) -> Result<()> {
-        let config_path = PathBuf::from(&self.config_file_path);
+    fn get_database_path(app_handle: &AppHandle) -> Result<PathBuf> {
+        Ok(app_handle
+            .path()
+            .app_data_dir()
+            .map_err(|_| SettingsError::ConfigDirNotFound)?
+            .join("settings.db"))
+    }
 
-        let json = serde_json::to_string_pretty(self)?;
-        fs::write(config_path, json)?;
+    fn get_connection(&self) -> SqliteResult<Connection> {
+        Connection::open(&self.db_path)
+    }
+
+    fn initialize_database(&self) -> Result<()> {
+        let conn = self.get_connection()?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS default_vegetation_params (
+                vegetation_type INTEGER PRIMARY KEY,
+                density REAL NOT NULL,
+                type_value INTEGER NOT NULL
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS user_vegetation_params (
+                vegetation_type INTEGER PRIMARY KEY,
+                density REAL NOT NULL,
+                type_value INTEGER NOT NULL
+            )",
+            [],
+        )?;
+        self.initialize_default_values(&conn)?;
+
         Ok(())
     }
 
-    fn get_config_file_path() -> String {
-        "settings.json".to_string()
+    fn initialize_default_values(&self, conn: &Connection) -> Result<()> {
+        let export_path_exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM settings WHERE key = 'export_path')",
+            [],
+            |row| row.get(0),
+        )?;
+
+        if !export_path_exists {
+            let default_path = Self::get_default_export_path();
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('export_path', ?1)",
+                params![default_path.to_string_lossy().to_string()],
+            )?;
+        }
+        let default_params_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM default_vegetation_params",
+            [],
+            |row| row.get(0),
+        )?;
+
+        if default_params_count == 0 {
+            let default_params = Self::create_default_vegetation_params();
+            for (vegetation_type, params) in default_params {
+                conn.execute(
+                    "INSERT INTO default_vegetation_params (vegetation_type, density, type_value) 
+                     VALUES (?1, ?2, ?3)",
+                    params![vegetation_type, params.density, params.type_value],
+                )?;
+            }
+        }
+
+        Ok(())
     }
 
     fn get_default_export_path() -> PathBuf {
-        #[cfg(windows)]
-        {
-            let user_dirs = UserDirs::new().unwrap();
-            user_dirs.download_dir().unwrap().to_path_buf()
-        }
-
-        #[cfg(not(windows))]
-        {
-            let user_dirs = XdgUserDirs::new().unwrap();
-            user_dirs.downloads().unwrap().to_path_buf()
-        }
+        UserDirs::new()
+            .and_then(|dirs| dirs.download_dir().map(|p| p.to_path_buf()))
+            .unwrap_or_else(|| PathBuf::from("Downloads"))
     }
 
     fn create_default_vegetation_params() -> HashMap<i8, VegetationParams> {
@@ -169,11 +171,39 @@ impl Settings {
         ])
     }
 
-    pub fn get_export_path(&self) -> &PathBuf {
-        &self.export_path
+    pub fn with_read<F, R>(f: F) -> R
+    where
+        F: FnOnce(&Settings) -> R,
+    {
+        let instance = SETTINGS_INSTANCE
+            .get()
+            .expect("Settings not initialized. Call Settings::init() first.");
+        let settings = instance.read().unwrap();
+        f(&settings)
     }
 
-    pub fn set_export_path(&mut self, path: PathBuf) -> Result<()> {
+    pub fn with_write<F, R>(f: F) -> Result<R>
+    where
+        F: FnOnce(&Settings) -> Result<R>,
+    {
+        let instance = SETTINGS_INSTANCE
+            .get()
+            .expect("Settings not initialized. Call Settings::init() first.");
+        let settings = instance.read().unwrap();
+        f(&settings)
+    }
+
+    pub fn get_export_path(&self) -> Result<PathBuf> {
+        let conn = self.get_connection()?;
+        let path_str: String = conn.query_row(
+            "SELECT value FROM settings WHERE key = 'export_path'",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(PathBuf::from(path_str))
+    }
+
+    pub fn set_export_path(&self, path: PathBuf) -> Result<()> {
         if !path.exists() {
             return Err(SettingsError::InvalidPath(format!(
                 "Path does not exist: {}",
@@ -186,29 +216,97 @@ impl Settings {
                 path.display()
             )));
         }
-        self.export_path = path;
+
+        let conn = self.get_connection()?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('export_path', ?1)",
+            params![path.to_string_lossy().to_string()],
+        )?;
+
         Ok(())
     }
 
-    pub fn get_vegetation_params(&self, vegetation_type: i8) -> Option<VegetationParams> {
-        self.user_vegetation_params
-            .get(&vegetation_type)
-            .or_else(|| self.default_vegetation_params.get(&vegetation_type))
-            .cloned()
+    pub fn get_vegetation_params(&self, vegetation_type: i8) -> Result<Option<VegetationParams>> {
+        let conn = self.get_connection()?;
+        let user_result = conn.query_row(
+            "SELECT vegetation_type, density, type_value FROM user_vegetation_params WHERE vegetation_type = ?1",
+            params![vegetation_type],
+            |row| Ok(VegetationParams {
+                vegetation_type: row.get::<_, u8>(0)?,
+                density: row.get(1)?,
+                type_value: row.get::<_, u8>(2)?,
+            })
+        );
+
+        if let Ok(params) = user_result {
+            return Ok(Some(params));
+        }
+
+        let default_result = conn.query_row(
+            "SELECT vegetation_type, density, type_value FROM default_vegetation_params WHERE vegetation_type = ?1",
+            params![vegetation_type],
+            |row| Ok(VegetationParams {
+                vegetation_type: row.get::<_, u8>(0)?,
+                density: row.get(1)?,
+                type_value: row.get::<_, u8>(2)?,
+            })
+        );
+
+        match default_result {
+            Ok(params) => Ok(Some(params)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(SettingsError::Database(e)),
+        }
     }
 
-    pub fn get_default_vegetation_params(&self, vegetation_type: i8) -> Option<VegetationParams> {
-        self.default_vegetation_params
-            .get(&vegetation_type)
-            .cloned()
+    pub fn get_default_vegetation_params(
+        &self,
+        vegetation_type: i8,
+    ) -> Result<Option<VegetationParams>> {
+        let conn = self.get_connection()?;
+
+        let result = conn.query_row(
+            "SELECT vegetation_type, density, type_value FROM default_vegetation_params WHERE vegetation_type = ?1",
+            params![vegetation_type],
+            |row| Ok(VegetationParams {
+                vegetation_type: row.get::<_, u8>(0)?,
+                density: row.get(1)?,
+                type_value: row.get::<_, u8>(2)?,
+            })
+        );
+
+        match result {
+            Ok(params) => Ok(Some(params)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(SettingsError::Database(e)),
+        }
     }
 
-    pub fn get_user_vegetation_params(&self, vegetation_type: i8) -> Option<VegetationParams> {
-        self.user_vegetation_params.get(&vegetation_type).cloned()
+    pub fn get_user_vegetation_params(
+        &self,
+        vegetation_type: i8,
+    ) -> Result<Option<VegetationParams>> {
+        let conn = self.get_connection()?;
+
+        let result = conn.query_row(
+            "SELECT vegetation_type, density, type_value FROM user_vegetation_params WHERE vegetation_type = ?1",
+            params![vegetation_type],
+            |row| Ok(VegetationParams {
+                vegetation_type: row.get::<_, u8>(0)?,
+                density: row.get(1)?,
+                type_value: row.get::<_, u8>(2)?,
+            })
+        );
+
+        match result {
+            Ok(params) => Ok(Some(params)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(SettingsError::Database(e)),
+        }
     }
 
     pub fn set_user_vegetation_params(
-        &mut self,
+        &self,
         vegetation_type: i8,
         params: VegetationParams,
     ) -> Result<()> {
@@ -222,39 +320,73 @@ impl Settings {
             ));
         }
 
-        self.user_vegetation_params.insert(vegetation_type, params);
+        let conn = self.get_connection()?;
+        conn.execute(
+            "INSERT OR REPLACE INTO user_vegetation_params (vegetation_type, density, type_value) 
+             VALUES (?1, ?2, ?3)",
+            params![vegetation_type, params.density, params.type_value],
+        )?;
+
         Ok(())
     }
 
     pub fn remove_user_vegetation_params(
-        &mut self,
+        &self,
         vegetation_type: i8,
-    ) -> Option<VegetationParams> {
-        self.user_vegetation_params.remove(&vegetation_type)
+    ) -> Result<Option<VegetationParams>> {
+        let conn = self.get_connection()?;
+        let existing = self.get_user_vegetation_params(vegetation_type)?;
+        conn.execute(
+            "DELETE FROM user_vegetation_params WHERE vegetation_type = ?1",
+            params![vegetation_type],
+        )?;
+
+        Ok(existing)
     }
 
-    pub fn reset_user_vegetation_params(&mut self) {
-        self.user_vegetation_params.clear();
+    pub fn reset_user_vegetation_params(&self) -> Result<()> {
+        let conn = self.get_connection()?;
+        conn.execute("DELETE FROM user_vegetation_params", [])?;
+        Ok(())
     }
 
-    pub fn get_available_vegetation_types(&self) -> Vec<i8> {
-        let mut types: Vec<i8> = self
-            .default_vegetation_params
-            .keys()
-            .chain(self.user_vegetation_params.keys())
-            .copied()
-            .collect();
-        types.sort();
-        types.dedup();
-        types
+    pub fn get_available_vegetation_types(&self) -> Result<Vec<i8>> {
+        let conn = self.get_connection()?;
+
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT vegetation_type FROM default_vegetation_params 
+             UNION 
+             SELECT DISTINCT vegetation_type FROM user_vegetation_params 
+             ORDER BY vegetation_type",
+        )?;
+
+        let rows = stmt.query_map([], |row| row.get::<_, i8>(0))?;
+
+        let mut types = Vec::new();
+        for row in rows {
+            types.push(row?);
+        }
+
+        Ok(types)
     }
 
-    pub fn has_user_params(&self, vegetation_type: i8) -> bool {
-        self.user_vegetation_params.contains_key(&vegetation_type)
+    pub fn has_user_params(&self, vegetation_type: i8) -> Result<bool> {
+        let conn = self.get_connection()?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM user_vegetation_params WHERE vegetation_type = ?1",
+            params![vegetation_type],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
     }
 }
 
 #[tauri::command]
 pub fn get_export_path() -> String {
-    Settings::with_read(|s| s.get_export_path().to_string_lossy().to_string())
+    Settings::with_read(|s| {
+        s.get_export_path()
+            .unwrap_or_else(|_| PathBuf::from("Downloads"))
+            .to_string_lossy()
+            .to_string()
+    })
 }

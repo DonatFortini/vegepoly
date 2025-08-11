@@ -11,8 +11,8 @@ use tauri::Emitter;
 use tauri::{AppHandle, State};
 use wkt::Wkt;
 
+use crate::get_export_path;
 use crate::models::processing::VegetationProcessingState;
-use crate::models::settings::Settings;
 use crate::models::vegetations::VegetationParams;
 use crate::sampling::fill_polygon;
 
@@ -104,13 +104,13 @@ pub fn get_preview_data(
         .iter()
         .filter_map(|point_str| {
             let parts: Vec<&str> = point_str.trim().split('\t').collect();
-            if parts.len() >= 2 {
-                if let (Ok(x), Ok(y)) = (
+            if parts.len() >= 2
+                && let (Ok(x), Ok(y)) = (
                     parts[0].trim().parse::<f64>(),
                     parts[1].trim().parse::<f64>(),
-                ) {
-                    return Some(SimplePoint { x, y });
-                }
+                )
+            {
+                return Some(SimplePoint { x, y });
             }
             None
         })
@@ -165,8 +165,8 @@ fn run_export(
 
     let now = chrono::Local::now();
     let output_filename = format!("Export {}.txt", now.format("%d-%m-%Y %Hh%M-%S"));
-    let export_path = Settings::with_read(|s| s.export_path.clone());
-
+    let export_path = get_export_path();
+    let export_path = std::path::Path::new(&export_path);
     let mut writer = std::io::BufWriter::new(
         std::fs::File::create(export_path.join(&output_filename))
             .map_err(|e| format!("Failed to create file: {}", e))?,

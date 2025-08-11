@@ -19,9 +19,8 @@ pub struct VegetationParams {
 #[tauri::command]
 pub fn get_default_vegetation_params(vegetation_type: u8) -> VegetationParams {
     Settings::with_read(|s| {
-        s.default_vegetation_params
-            .get(&(vegetation_type as i8))
-            .cloned()
+        s.get_default_vegetation_params(vegetation_type as i8)
+            .unwrap_or(None)
             .unwrap_or(VegetationParams {
                 vegetation_type,
                 density: 5.0,
@@ -43,11 +42,8 @@ pub fn set_user_vegetation_params(
     vegetation_type: i8,
     params: VegetationParams,
 ) -> Result<(), String> {
-    let _ = Settings::with_write(|s| {
-        Ok(s.set_user_vegetation_params(vegetation_type, params)
-            .map_err(|e| e.to_string()))
-    });
-    Ok(())
+    Settings::with_write(|s| s.set_user_vegetation_params(vegetation_type, params))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -59,5 +55,8 @@ pub fn set_user_vegetation_params(
 /// # Retours
 /// Option<VegetationParams> contenant les paramètres de végétation de l'utilisateur ou None si non définis
 pub fn get_user_vegetation_params(vegetation_type: i8) -> Option<VegetationParams> {
-    Settings::with_read(|s| s.user_vegetation_params.get(&vegetation_type).cloned())
+    Settings::with_read(|s| {
+        s.get_user_vegetation_params(vegetation_type)
+            .unwrap_or(None)
+    })
 }

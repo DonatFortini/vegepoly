@@ -39,8 +39,6 @@ impl SpatialDistributionSampler {
         let width = max_x - min_x;
         let height = max_y - min_y;
 
-        // La taille de cellule est calculée pour garantir qu'une cellule ne peut contenir
-        // qu'un seul point respectant la distance minimale
         let cell_size = min_distance / std::f64::consts::SQRT_2;
 
         let grid_width = (width / cell_size).ceil() as usize + 1;
@@ -71,7 +69,6 @@ impl SpatialDistributionSampler {
         let mut rng = rand::rng();
         let (min_x, min_y, max_x, max_y) = self.bounds;
 
-        // Place un point initial aléatoire à l'intérieur du polygone
         for _ in 0..100 {
             let x = min_x + rng.random::<f64>() * (max_x - min_x);
             let y = min_y + rng.random::<f64>() * (max_y - min_y);
@@ -87,32 +84,26 @@ impl SpatialDistributionSampler {
             return Vec::new();
         }
 
-        // Itère tant qu'il reste des points actifs
         while !self.active_indices.is_empty() {
-            // Sélectionne aléatoirement un point actif
             let idx = rng.random_range(0..self.active_indices.len());
             let active_idx = self.active_indices[idx];
             let active_point = self.points[active_idx];
 
             let mut found_new_point = false;
 
-            // Tente de placer un nouveau point autour du point actif
             for _ in 0..self.max_attempts {
-                // Génère une position aléatoire autour du point actif
                 let angle = 2.0 * std::f64::consts::PI * rng.random::<f64>();
                 let radius = self.min_distance + self.min_distance * rng.random::<f64>();
 
                 let new_x = active_point.x() + radius * angle.cos();
                 let new_y = active_point.y() + radius * angle.sin();
 
-                // Vérifie si le nouveau point est dans les limites
                 if new_x < min_x || new_x >= max_x || new_y < min_y || new_y >= max_y {
                     continue;
                 }
 
                 let new_point = Point::new(new_x, new_y);
 
-                // Vérifie si le point est à l'intérieur du polygone et respecte la distance minimale
                 if polygon.contains(&new_point) && self.is_point_valid(&new_point) {
                     self.add_point(new_point);
                     found_new_point = true;
@@ -120,7 +111,6 @@ impl SpatialDistributionSampler {
                 }
             }
 
-            // Si aucun nouveau point n'a été trouvé, retire ce point de la liste des points actifs
             if !found_new_point {
                 self.active_indices.swap_remove(idx);
             }
@@ -137,15 +127,12 @@ impl SpatialDistributionSampler {
         let idx = self.points.len();
         self.points.push(point);
 
-        // Ajoute l'indice aux points actifs
         self.active_indices.push(idx);
 
-        // Calcule la position du point dans la grille
         let (min_x, min_y, _, _) = self.bounds;
         let grid_x = ((point.x() - min_x) / self.cell_size) as usize;
         let grid_y = ((point.y() - min_y) / self.cell_size) as usize;
 
-        // Enregistre la position du point dans la grille
         if grid_x < self.grid_width && grid_y < self.grid_height {
             let grid_idx = grid_y * self.grid_width + grid_x;
             if grid_idx < self.grid.len() {
@@ -164,32 +151,27 @@ impl SpatialDistributionSampler {
     fn is_point_valid(&self, point: &Point<f64>) -> bool {
         let (min_x, min_y, _, _) = self.bounds;
 
-        // Calcule la position du point dans la grille
         let grid_x = ((point.x() - min_x) / self.cell_size) as usize;
         let grid_y = ((point.y() - min_y) / self.cell_size) as usize;
 
-        // Vérifie uniquement les cellules voisines pour optimiser la recherche
         let start_x = grid_x.saturating_sub(1);
         let start_y = grid_y.saturating_sub(1);
         let end_x = (grid_x + 1).min(self.grid_width - 1);
         let end_y = (grid_y + 1).min(self.grid_height - 1);
 
-        // Itère sur les cellules voisines
         for y in start_y..=end_y {
             for x in start_x..=end_x {
                 let idx = y * self.grid_width + x;
-                if idx < self.grid.len() {
-                    // Si une cellule contient un point, vérifie la distance
-                    if let Some(point_idx) = self.grid[idx] {
-                        let other = &self.points[point_idx];
-                        let dx = point.x() - other.x();
-                        let dy = point.y() - other.y();
-                        let dist_sq = dx * dx + dy * dy;
+                if idx < self.grid.len()
+                    && let Some(point_idx) = self.grid[idx]
+                {
+                    let other = &self.points[point_idx];
+                    let dx = point.x() - other.x();
+                    let dy = point.y() - other.y();
+                    let dist_sq = dx * dx + dy * dy;
 
-                        // Rejette le point s'il est trop proche d'un point existant
-                        if dist_sq < self.min_distance * self.min_distance {
-                            return false;
-                        }
+                    if dist_sq < self.min_distance * self.min_distance {
+                        return false;
                     }
                 }
             }

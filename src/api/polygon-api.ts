@@ -8,7 +8,13 @@ export interface Polygon {
   interiors: Point[][];
 }
 
-// Utility function to parse WKT strings (kept for potential future use)
+/**
+ * Parses a WKT (Well-Known Text) representation of a polygon into a Polygon object.
+ * Currently, it only handles the exterior ring and any interior rings.
+ *
+ * @param {string} wktString - The WKT string representing the polygon.
+ * @returns {Polygon} An object containing the exterior and interior rings as arrays of Points.
+ */
 export function parsePolygonFromWkt(wktString: string): Polygon {
   const coordsMatch = wktString.match(/POLYGON\s*\(\((.*?)\)\)/);
   if (!coordsMatch || !coordsMatch[1]) return { exterior: [], interiors: [] };
