@@ -44,8 +44,8 @@
       },
       "wix": {
         "language": [
-          "en-us",
-          "fr-fr"
+          "en-US",
+          "fr-FR"
         ]
       }
     },
