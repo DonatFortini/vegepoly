@@ -31,9 +31,10 @@
       "digestAlgorithm": null,
       "nsis": {
         "languages": [
-          "en-US",
-          "fr-FR"
-        ]
+          "English",
+          "French"
+        ],
+        "displayLanguageSelector": true
       },
       "signCommand": null,
       "timestampUrl": null,
