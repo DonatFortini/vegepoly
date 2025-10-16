@@ -1,6 +1,6 @@
 [package]
 name = "vegepoly"
-version = "0.1.0"
+version = "1.0.0"
 description = "A Tauri App"
 authors = ["Donat Fortini"]
 edition = "2024"
@@ -34,3 +34,8 @@ directories = "6.0.0"
 wkt = "0.14.0"
 thiserror = "2.0.16"
 rusqlite = { version = "0.37.0", features = ["bundled"] }
+tokio = "1.48.0"
+
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2"
